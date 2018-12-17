@@ -6,3 +6,10 @@ Feel free to use the code to run your experiments.
 
 I want to thank Alec Radford for his mentorship and introducing me to NLP and Joshua Achiam for his valuable advice on reinforcement learning and creating the Spinning Up (https://spinningup.openai.com/en/latest/index.html) that was extremely helpful for my project.
 
+
+
+Setup:
+
+conda install --yes --file requirements.txt
+Source activate spinningup
+Python3 train.py 
