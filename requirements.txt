@@ -5,3 +5,4 @@ scipy
 spinningup
 gym
 matplotlib
+imageio

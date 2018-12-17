@@ -13,7 +13,8 @@ import gym
 from gym import spaces
 from gym.spaces import Box, Discrete
 import math
-import random
+import imageio
+import joblib
 
 import matplotlib.pyplot as plt
 from scipy.ndimage.filters import gaussian_filter1d as gf1d
@@ -23,7 +24,7 @@ from IPython.display import clear_output
 import tensorflow.contrib.slim as slim
 from spinup.exercises.common import print_result
 from spinup import ppo
-
+from spinup.utils.logx import restore_tf_graph
 
 learning_rate = 0.0005
 gamma = 0.99
@@ -31,14 +32,13 @@ num_rows = 8
 num_cols = 8
 num_states = 2
 num_channels = 4
-images = []
-using_cmds = 1
 
+to_train = False
+exp_id = 1544401745
 
-#Grid World Environment 
+# Grid World Environment 
 
-
-#One hot encoding (background, R, G, B, an agent)
+# One hot encoding (background, R, G, B, an agent)
 def encode(x):
     return np.array([[0,0,0,0],
                      [0,0,1,0],
@@ -46,12 +46,20 @@ def encode(x):
                      [1,0,0,0],
                      [1,1,1,1]], dtype='float32')[x]
 
-#Commands
+# Commands
 class Walk:
     GO = 1      # 5
     AVOID = 2   # 6
 
-#Objects
+# Colors
+class Color:
+    BLACK = 0
+    GREEN = 1
+    RED = 2
+    BLUE = 3
+    WHITE = 4
+
+# Objects
 class Obj:
     BLACK = 0
     TRIANGLE = 1 # 7
@@ -59,13 +67,7 @@ class Obj:
     CIRCLE = 3   # 9
     WHITE = 4
 
-#Colors
-class Color:
-    BLACK = 0
-    GREEN = 1
-    RED = 2
-    BLUE = 3
-    WHITE = 4
+
 
 
 def construct_cmd(train=True):
@@ -80,6 +82,7 @@ def construct_cmd(train=True):
     return [walk, color, obj]
 
 # Translating commands to adjust to object-color pairs
+
 def translate_cmd(target):
     walk = 5 if target[0] == Walk.GO else 6
     if target[2] == 1:
@@ -90,25 +93,24 @@ def translate_cmd(target):
         object = 9
     return [walk, target[1], object]
 
-
-#Using gym.evn as an argument to be able to implement a PPO algorithm
 class GoalGridWorld(gym.Env):
     DX = [-1, 0, +1, 0] #The way an agent moves on the ‘x’ axis 
     DY = [0, +1, 0, -1] #The way an agent moves on the ‘y’ axis 
 
-    #Identity a matrix to reduce dimensionality
     EYE2 = np.eye(2) 
     EYE3 = np.eye(3)
 
-    #Reward and penalize to adjust an agent’s behavior 
+    # Reward and penalize to adjust an agent’s behavior 
+
     STEP_REWARD = -1
     CORRECT_TARGET_REWARD = 100
     INCORRECT_TARGET_REWARD = -36
-    AVOID_TARGET_REWARD = 0
+    AVOID_TARGET_REWARD = 10
     BOUNDARY_REWARD = -100
     NUM_STEPS_EXCEEDED_REWARD = 0
 
     # Number of columns and rows of the gridworld environment an agent navigates in
+
     def __init__(self,
                  num_rows = 8,
                  num_cols = 8):
@@ -127,6 +129,7 @@ class GoalGridWorld(gym.Env):
 
     def set_objects(self, target):
         # Ensure that target color-object pairs exist in the environment 
+
         self.object_color_map[target[1]] = target[2] 
         colors = [Color.GREEN, Color.RED, Color.BLUE]
         colors.remove(target[1])
@@ -135,10 +138,12 @@ class GoalGridWorld(gym.Env):
         objects.remove(target[2])
 
         # Assign to each color a random object that is not from the target
+
         self.object_color_map[colors[0]] = random.choice([objects[0], objects[1]])
         self.object_color_map[colors[1]] = random.choice([objects[0], objects[1]])
 
-    # Identify a matrix to reduce dimensionality to make it easier for an agent to learn from the environment 
+    # Simplifying the environment 
+
     def get_obs(self):
         
         walk_cmd = self.EYE2[self.target[0]-1]
@@ -146,14 +151,16 @@ class GoalGridWorld(gym.Env):
         obj_cmd = self.EYE3[self.target[2]-1]
         
         # Concatenating colors state, object state, commands to simplify the environment
+
         cmd = np.concatenate([walk_cmd, color_cmd, obj_cmd])
-        a = np.concatenate([encode(self.state).flat, encode(self.object_state).flat, cmd]) #reshape((1,1,520))
+        a = np.concatenate([encode(self.state).flat, encode(self.object_state).flat, cmd]) # reshape((1,1,520))
         return a 
 
     # Reset the environment 
+
     def reset(self, target=None, train=True): # [Walk, Color, Object]
         if target is None:
-            target = construct_cmd(train)
+            target = construct_cmd(train=train)
         assert target[0] is Walk.GO or target[0] is Walk.AVOID
         assert target[1] is Color.GREEN or target[1] is Color.RED or target[1] is Color.BLUE
         assert target[2] is Obj.TRIANGLE or target[2] is Obj.SQUARE or target[2] is Obj.CIRCLE
@@ -170,15 +177,13 @@ class GoalGridWorld(gym.Env):
 
         green_pos, red_pos, blue_pos, player_pos = random.sample(all_points, k=4)
 
-        # What is state? is it colors?
+    
         self.state[green_pos] = Color.GREEN
         self.state[red_pos] = Color.RED
         self.state[blue_pos] = Color.BLUE
         self.state[player_pos] = Color.WHITE
 
         self.set_objects(target)
-
-        # What is object state ? objects?
         self.object_state[green_pos] = self.object_color_map[Color.GREEN]
         self.object_state[red_pos] = self.object_color_map[Color.RED]
         self.object_state[blue_pos] = self.object_color_map[Color.BLUE]
@@ -187,12 +192,13 @@ class GoalGridWorld(gym.Env):
         self.position = player_pos #Agent's location
         return self.get_obs()
 
-    # What action does this function do?
+
     def offset(self, point, direction):
         x, y = point
         return x + self.DX[direction], y + self.DY[direction]
 
-    # Check to see if the bot is outside or inside the board?
+    # Check to see if the agent is outside or inside the board
+
     def outside(self, point):
         x, y = point
         if x < 0 or x >= self.num_rows:
@@ -213,7 +219,8 @@ class GoalGridWorld(gym.Env):
         self.count_steps += 1
         self.reward += self.STEP_REWARD  
 
-        # Making sure the agent will not go outside
+        # Making sure the agent will not go outside the board
+
         if self.outside(self.position):
             if action == 0:
                 new_action = 2
@@ -225,9 +232,9 @@ class GoalGridWorld(gym.Env):
                 new_action = 1
             self.position = self.offset(self.position, new_action)
 
-        # 
+        
         #   Reward conditions
-        # 
+         
         elif self.state[self.position] == self.target[1] \
         and self.target[0] == Walk.GO \
         and self.object_state[self.position] == self.target[2]: #  If the object is the same e.g. Circle
@@ -254,8 +261,10 @@ class GoalGridWorld(gym.Env):
 
         return self.get_obs(), self.reward if self.done else 0, self.done, None
 
-# Neural network is a multilayer perceptron 
-# CITE mlp, mlp_categorial, mlp_actor_critic code is taken from spingup link to github
+# Multilayer perceptron 
+
+# The code for mlp, mlp_categorical, mlp_actor_critic is taken from OpenAI Spinning Up https://github.com/openai/spinningup
+
 def mlp(x, hidden_sizes=(32,), activation=tf.tanh, output_activation=None):
 
     with tf.variable_scope('ob'):
@@ -267,7 +276,7 @@ def mlp(x, hidden_sizes=(32,), activation=tf.tanh, output_activation=None):
     return logits
 
 """
-#Policy 
+Policy 
 """
 
 def mlp_categorical_policy(x, a, hidden_sizes, activation, output_activation, action_space):
@@ -286,6 +295,7 @@ def mlp_actor_critic(x, a, hidden_sizes=(64,64), activation=tf.tanh,
                      output_activation=None, policy=None, action_space=None):
 
     # Default policy builder depends on action space
+
     if policy is None and isinstance(action_space, Box):
         policy = mlp_gaussian_policy
     elif policy is None and isinstance(action_space, Discrete):
@@ -296,12 +306,81 @@ def mlp_actor_critic(x, a, hidden_sizes=(64,64), activation=tf.tanh,
         v = tf.squeeze(mlp(x, list(hidden_sizes)+[1], activation, None), axis=1)
     return pi, logp, logp_pi, v
 
+class Color:
+    BLACK = 0
+    GREEN = 1
+    RED = 2
+    BLUE = 3
+    WHITE = 4
+
+    # Rendering 
+    
+def render(state, images, choice=0): 
+
+    # Colors
+    image = np.pad(state, ((1,1), (1,1)), 'constant')
+    image = scipy.ndimage.zoom(image, 64, order=0, mode='reflect') 
+    image = np.expand_dims(image, -1) 
+    image = np.repeat(image, 3, axis=2) 
+    
+    # Set green
+    (image[:,:,0])[image[:,:,0]==1] = 0
+    (image[:,:,2])[image[:,:,2]==1] = 0
+    
+    # Set red
+    (image[:,:,1])[image[:,:,0]==2] = 0
+    (image[:,:,2])[image[:,:,2]==2] = 0
+    
+    # Set blue
+    (image[:,:,0])[image[:,:,0]==3] = 0
+    (image[:,:,1])[image[:,:,1]==3] = 0
+    
+    images.append(image)
+    return images
+
+def simulate(path, color_output="color_state.gif", object_output="object_state.gif"):
+    sess = tf.Session()
+    graph = restore_tf_graph(sess, path)
+    env = GoalGridWorld()
+
+    state = env.reset(train=False)
+    running = True
+    count = 0
+    color_images, object_images = [], []
+    
+    while running:
+        a, _ = sess.run([graph['pi'], graph['v']], feed_dict={graph['x']: state.reshape(1,-1)})
+        state, reward, done, _ = env.step(a[0])
+
+        color_images = render(env.state, color_images)
+        object_images = render(env.object_state, object_images)
+        running = not done
+
+        count += 1 
+        if count > 100:
+            break
+
+    save_gif(color_images, path=color_output)
+    save_gif(object_images, path=object_output)
+    print("____________________________")
+    print("Target: {}".format(env.target))
+    print("Reward: {}".format(reward))
+    print("____________________________")
+
+def save_gif(images, path="example.gif"):
+    with imageio.get_writer(path, mode='I') as writer:
+        for image in images:
+            writer.append_data(image)
+
 if __name__ == '__main__':
     """
     Run the code to verify the solution
     """
-
-    logdir = "data/experiments/%i"%int(time.time())
-    ppo(env_fn = GoalGridWorld,
-        actor_critic=mlp_actor_critic,
-        steps_per_epoch=100000, epochs=100, logger_kwargs=dict(output_dir=logdir))
+    if to_train:
+        logdir = "data/experiments/%i"%int(time.time())
+        ppo(env_fn = GoalGridWorld,
+            actor_critic=mlp_actor_critic,
+            steps_per_epoch=100000, epochs=100, logger_kwargs=dict(output_dir=logdir))
+    else:
+        logdir = "data/experiments/%i/simple_save/"%int(exp_id)
+        simulate(path=logdir)
