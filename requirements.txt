@@ -1,0 +1,7 @@
+tensorflow
+numpy
+pandas
+scipy
+spinningup
+gym
+matplotlib
