@@ -8,8 +8,4 @@ I want to thank Alec Radford for his mentorship and introducing me to NLP and Jo
 
 
 
-Setup:
 
-conda install --yes --file requirements.txt
-Source activate spinningup
-Python3 train.py 
